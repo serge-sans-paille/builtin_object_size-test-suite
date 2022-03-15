@@ -7,9 +7,16 @@
 #include <complex.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <string.h>
 
-#define maxsizeof(x, y) (sizeof(x) > sizeof(y) ? sizeof(x) : sizeof(y))
-#define minsizeof(x, y) (sizeof(x) < sizeof(y) ? sizeof(x) : sizeof(y))
+#define max(x, y) ((x) > (y) ? (x) : (y))
+#define min(x, y) ((x) < (y) ? (x) : (y))
+#define maxsizeof(x, y) max(sizeof(x), sizeof(y))
+#define minsizeof(x, y) min(sizeof(x), sizeof(y))
+
+void check_null() {
+  assert(__builtin_object_size(NULL, 0) == -1);
+}
 
 void check_integers() {
   bool b;
@@ -142,7 +149,110 @@ void check_ifexpr_arrays() {
   assert(__builtin_object_size(a1, 2) == minsizeof(a2, a3) - sizeof(a2[0]));
 }
 
+void check_static_malloc() {
+  size_t n = 5;
+  char *m = malloc(n);
+  assert(__builtin_object_size(m, 0) == n);
+  assert(__builtin_object_size(m + 0, 0) == n - 0);
+  assert(__builtin_object_size(m + 1, 0) == n - 1);
+  assert(__builtin_object_size(m + 2, 0) == n - 2);
+  assert(__builtin_object_size(m + 3, 0) == n - 3);
+  assert(__builtin_object_size(m + 4, 0) == n - 4);
+  assert(__builtin_object_size(m + 5, 0) == n - 5);
+  free(m);
+}
+
+void check_static_calloc() {
+  size_t n = 5;
+  typedef short elt_t;
+  elt_t *m = calloc(n, sizeof(elt_t));
+  assert(__builtin_object_size(m, 0) == n * sizeof(elt_t));
+  assert(__builtin_object_size(m + 0, 0) == (n - 0) * sizeof(elt_t));
+  assert(__builtin_object_size(m + 1, 0) == (n - 1) * sizeof(elt_t));
+  assert(__builtin_object_size(m + 2, 0) == (n - 2) * sizeof(elt_t));
+  assert(__builtin_object_size(m + 3, 0) == (n - 3) * sizeof(elt_t));
+  assert(__builtin_object_size(m + 4, 0) == (n - 4) * sizeof(elt_t));
+  assert(__builtin_object_size(m + 5, 0) == (n - 5) * sizeof(elt_t));
+  free(m);
+}
+
+void check_static_realloc() {
+  size_t n = 5;
+  char *m = malloc(3);
+  m = realloc(m, n);
+
+  assert(__builtin_object_size(m, 0) == n);
+  assert(__builtin_object_size(m + 0, 0) == n - 0);
+  assert(__builtin_object_size(m + 1, 0) == n - 1);
+  assert(__builtin_object_size(m + 2, 0) == n - 2);
+  assert(__builtin_object_size(m + 3, 0) == n - 3);
+  assert(__builtin_object_size(m + 4, 0) == n - 4);
+  assert(__builtin_object_size(m + 5, 0) == n - 5);
+  free(m);
+}
+
+void check_mixing_malloc() {
+  size_t n0 = 5, n1 = 3;
+  char *m = rand() & 1 ? malloc(n0) : malloc(n1);
+
+  assert(__builtin_object_size(m, 0) == max(n0, n1));
+  assert(__builtin_object_size(m, 1) == max(n0, n1));
+  assert(__builtin_object_size(m, 2) == min(n0, n1));
+
+  assert(__builtin_object_size(m + 0, 0) == max(n0, n1) - 0);
+  assert(__builtin_object_size(m + 1, 0) == max(n0, n1) - 1);
+  assert(__builtin_object_size(m + 2, 0) == max(n0, n1) - 2);
+  assert(__builtin_object_size(m + 3, 0) == max(n0, n1) - 3);
+  assert(__builtin_object_size(m + 4, 0) == max(n0, n1) - 4);
+  assert(__builtin_object_size(m + 5, 0) == max(n0, n1) - 5);
+  assert(__builtin_object_size(m + 5, 2) == 0);
+  free(m);
+}
+
+void check_type_punning() {
+  int32_t i;
+  short *s = (short*)(char*)&i;
+  assert(__builtin_object_size(s, 0) == sizeof(i));
+  assert(__builtin_object_size(s + 1, 0) == sizeof(i) - sizeof(*s));
+
+  union { int32_t* ip; short * sp;} u;
+  u.ip = &i;
+  assert(__builtin_object_size(u.ip, 0) == sizeof(i));
+  assert(__builtin_object_size(u.sp, 0) == sizeof(i));
+}
+
+void check_copying_address() {
+  int32_t i;
+  void * v = &i;
+  assert(__builtin_object_size(v, 0) == sizeof(i));
+
+  void* addresses[3];
+  addresses[1] = v;
+  assert(__builtin_object_size(addresses[1], 0) == sizeof(i));
+
+  typedef struct {
+    int* v0;
+    void* v1;
+  } vv_t;
+  vv_t vv;
+  vv.v1 = addresses[1];
+  assert(__builtin_object_size(vv.v1, 0) == sizeof(i));
+}
+
+void check_array_of_malloced() {
+  void* a[3] = {malloc(1), malloc(2), malloc(3)};
+
+  assert(__builtin_object_size(a[0], 0) == 1);
+  assert(__builtin_object_size(a[1], 0) == 2);
+  assert(__builtin_object_size(a[2], 0) == 3);
+
+  free(a[0]);
+  free(a[1]);
+  free(a[2]);
+}
+
 int main() {
+  check_null();
   check_integers();
   check_floats();
   check_complex();
@@ -154,5 +264,12 @@ int main() {
   check_struct_with_aligned_field();
   check_ifexpr_scalars();
   check_ifexpr_arrays();
+  check_static_malloc();
+  check_static_calloc();
+  check_static_realloc();
+  check_mixing_malloc();
+  check_type_punning();
+  check_copying_address();
+  check_array_of_malloced();
   return 0;
 }
