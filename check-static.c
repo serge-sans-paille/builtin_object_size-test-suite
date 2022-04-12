@@ -2,6 +2,7 @@
 #include <complex.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdio.h>
 #include <alloca.h>
@@ -109,6 +110,20 @@ void check_simple_array() {
   CHECK(__builtin_object_size(&a[3], 0), sizeof(a[0]) * 0);
 }
 
+int a[3];
+void check_global_array() {
+  CHECK(__builtin_object_size(a, 0), sizeof(a));
+  CHECK(__builtin_object_size(&a[0], 0), sizeof(a));
+  CHECK(__builtin_object_size(&a[1], 0), sizeof(a[0]) * 2);
+  CHECK(__builtin_object_size(&a[2], 0), sizeof(a[0]) * 1);
+  CHECK(__builtin_object_size(&a[3], 0), sizeof(a[0]) * 0);
+}
+
+int a[3];
+void check_global_array_with_offset() {
+  CHECK(__builtin_object_size(a + 2, 0), sizeof(a) - 2 * sizeof(int));
+}
+
 void check_simple_struct() {
   typedef struct {
     float f;
@@ -199,6 +214,23 @@ void check_if_scalars() {
   CHECK(__builtin_object_size(fd, 0), maxsizeof(f0, d));
   CHECK(__builtin_object_size(fd, 1), maxsizeof(f0, d));
   CHECK(__builtin_object_size(fd, 2), minsizeof(f0, d));
+}
+
+void check_if_then_offset() {
+  float f0, f1; double d;
+  void* ff = &f0;
+  if(rand() & 1)
+    ff = &f1;
+  CHECK(__builtin_object_size(ff + 1, 0), maxsizeof(f0, f1) - 1);
+
+  void* fd;
+  if(rand() & 1)
+    fd = &f0;
+  else
+    fd = &d;
+  CHECK(__builtin_object_size(fd + 1, 0), maxsizeof(f0, d) - 1);
+  CHECK(__builtin_object_size(fd + 1, 1), maxsizeof(f0, d) - 1);
+  CHECK(__builtin_object_size(fd + 1, 2), minsizeof(f0, d) - 1);
 }
 
 void check_while_scalars() {
@@ -341,7 +373,7 @@ void check_trailing_array_idiom() {
 }
 
 void check_strdup() {
-  char const s[] = "erty";
+  static char const s[] = "erty";
   CHECK(__builtin_object_size(s, 0), sizeof(s));
   char * st = strdup(s);
   CHECK(__builtin_object_size(st, 0), sizeof(s));
@@ -349,7 +381,7 @@ void check_strdup() {
 }
 
 void check_strndup() {
-  char const s[] = "erty";
+  static char const s[] = "erty";
   CHECK(__builtin_object_size(s, 0), sizeof(s));
   char * st = strndup(s, sizeof(s));
   CHECK(__builtin_object_size(st, 0), sizeof(s));
@@ -390,6 +422,56 @@ void check_array_of_malloced() {
   free(a[2]);
 }
 
+void check_storing_in_arg(void** restrict mem) {
+  *mem = malloc(5);
+  CHECK(__builtin_object_size(*mem, 0), 5);
+}
+void check_storing_in_field() {
+  struct dummy {
+    void * mem;
+  } dat = { malloc(5) };
+
+  CHECK(__builtin_object_size(dat.mem, 0), 5);
+
+  free(dat.mem);
+}
+
+void check_conditional_storing_in_arg(void** restrict mem) {
+  int n0 = 5, n1 = 8;
+  *mem = malloc(n0);
+  if(rand() & 1) {
+    free(*mem);
+    *mem = malloc(n1);
+  }
+  CHECK(__builtin_object_size(*mem, 0), max(n0, n1));
+  CHECK(__builtin_object_size(*mem, 1), max(n0, n1));
+  CHECK(__builtin_object_size(*mem, 2), min(n0, n1));
+}
+
+struct dummy {
+  void * mem;
+};
+void check_storing_in_arg_field(struct dummy* restrict dat) {
+  dat->mem = malloc(5);
+
+  CHECK(__builtin_object_size(dat->mem, 0), 5);
+
+  free(dat->mem);
+}
+
+void check_type_erased_memory() {
+  float f;
+  uintptr_t i = (uintptr_t)&f;
+  void * v = (void*)i;
+  CHECK(__builtin_object_size(v, 0), sizeof(float));
+}
+
+void check_strcpy() {
+  char buffer[8];
+  char* s = strcpy(buffer, "hi");
+  CHECK(__builtin_object_size(s, 0), sizeof(buffer));
+}
+
 int main() {
   check_null();
   check_sideeffects();
@@ -398,6 +480,8 @@ int main() {
   check_floats();
   check_complex();
   check_simple_array();
+  check_global_array();
+  check_global_array_with_offset();
   check_simple_struct();
   check_simple_union();
   check_array_of_struct();
@@ -405,11 +489,13 @@ int main() {
   check_struct_with_aligned_field();
   check_ifexpr_scalars();
   check_if_scalars();
+  check_if_then_offset();
   check_while_scalars();
   check_ifexpr_arrays();
   check_static_alloca();
   check_static_malloc();
-  check_freed_memory();
+  // what's the official status of bos on freeed memory o_O
+  //check_freed_memory();
   check_static_calloc();
   check_static_realloc();
   check_static_posix_memalign();
@@ -421,5 +507,14 @@ int main() {
   check_strdup();
   check_strndup();
   check_alloc_size_attribute();
+  void* mem;
+  check_storing_in_arg(&mem);
+  free(mem);
+  check_storing_in_field();
+  struct dummy dat;
+  check_storing_in_arg_field(&dat);
+  check_conditional_storing_in_arg(&mem);
+  check_type_erased_memory();
+  check_strcpy();
   return failures;
 }
